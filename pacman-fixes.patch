@@ -1,0 +1,351 @@
+diff --git a/app/page.tsx b/app/page.tsx
+index 9f5e2b2..5a41f9a 100644
+--- a/app/page.tsx
++++ b/app/page.tsx
+@@ -192,7 +192,7 @@ export default function PacManLab() {
+   const handleSelectLevel = useCallback(
+     (level: number) => {
+       setSelectedLevel(level)
+-      const newState = createInitialState(config)
++      const newState = createInitialState(config, level)
+       newState.session.level = level
+       setGameState(newState)
+       setAppView("game")
+@@ -218,7 +218,7 @@ export default function PacManLab() {
+   }, [])
+ 
+   const handleReset = useCallback(() => {
+-    const newState = resetGame(config)
++    const newState = resetGame(config, selectedLevel)
+     newState.session.level = selectedLevel
+     setGameState(newState)
+     gameStartTimeRef.current = Date.now()
+@@ -248,12 +248,23 @@ export default function PacManLab() {
+ 
+   // Step-by-step mode handlers
+   const handleToggleStepByStep = useCallback(() => {
+-    setGameState((prev) => ({
+-      ...prev,
+-      isStepByStepMode: !prev.isStepByStepMode,
+-      isPaused: !prev.isStepByStepMode,
+-    }))
++    setGameState((prev) => {
++      if (!prev.isStepByStepMode) {
++        return {
++          ...prev,
++          isStepByStepMode: true,
++          isPaused: true,
++          currentFrameIndex: 0,
++        }
++      }
++
++      return {
++        ...prev,
++        isStepByStepMode: false,
++        isPaused: false,
++        currentFrameIndex: Math.max(prev.frameHistory.length - 1, 0),
++      }
++    })
+   }, [])
+diff --git a/components/game/game-canvas.tsx b/components/game/game-canvas.tsx
+index 95ce3c1..c2812b4 100644
+--- a/components/game/game-canvas.tsx
++++ b/components/game/game-canvas.tsx
+@@ -29,6 +29,12 @@ const GHOST_COLORS: Record<string, string> = {
+ 
+ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps) {
+   const canvasRef = useRef<HTMLCanvasElement>(null)
++  const frame = gameState.isStepByStepMode
++    ? gameState.frameHistory[gameState.currentFrameIndex]
++    : undefined
++  const pacmanPosition = frame?.pacmanPosition ?? gameState.pacman.position
++  const pacmanDirection = frame?.pacmanDirection ?? gameState.pacman.direction
++  const ghostsToRender = frame?.ghostStates ?? gameState.ghosts
+ 
+   const drawMaze = useCallback(
+     (ctx: CanvasRenderingContext2D) => {
+@@ -87,8 +93,8 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps
+   )
+ 
+   const drawPacman = useCallback(
+     (ctx: CanvasRenderingContext2D) => {
+-      const { pacman } = gameState
+-      const px = pacman.position.x * cellSize + cellSize / 2
+-      const py = pacman.position.y * cellSize + cellSize / 2
++      const px = pacmanPosition.x * cellSize + cellSize / 2
++      const py = pacmanPosition.y * cellSize + cellSize / 2
+       const radius = cellSize / 2 - 2
+ 
+       // Ángulo de la boca según dirección
+@@ -97,7 +103,7 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps
+       let startAngle = 0.2
+       let endAngle = Math.PI * 2 - 0.2
+ 
+-      switch (pacman.direction) {
++      switch (pacmanDirection) {
+         case "right":
+           startAngle = 0.2
+           endAngle = Math.PI * 2 - 0.2
+@@ -126,13 +132,13 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps
+       ctx.arc(px, py, radius, startAngle, endAngle)
+       ctx.closePath()
+       ctx.fill()
+     },
+-    [gameState, cellSize],
++    [pacmanPosition, pacmanDirection, cellSize],
+   )
+ 
+   const drawGhost = useCallback(
+-    (ctx: CanvasRenderingContext2D, ghost: (typeof gameState.ghosts)[0]) => {
++    (ctx: CanvasRenderingContext2D, ghost: (typeof ghostsToRender)[0]) => {
+       const px = ghost.position.x * cellSize + cellSize / 2
+       const py = ghost.position.y * cellSize + cellSize / 2
+       const radius = cellSize / 2 - 2
+@@ -178,12 +184,12 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps
+       ctx.arc(px + eyeOffsetX + pupilX, py + eyeOffsetY + pupilY, 1.5, 0, Math.PI * 2)
+       ctx.fill()
+     },
+-    [gameState, cellSize],
++    [cellSize, ghostsToRender],
+   )
+ 
+   const drawGhosts = useCallback(
+     (ctx: CanvasRenderingContext2D) => {
+-      for (const ghost of gameState.ghosts) {
++      for (const ghost of ghostsToRender) {
+         drawGhost(ctx, ghost)
+       }
+     },
+-    [gameState.ghosts, drawGhost],
++    [ghostsToRender, drawGhost],
+   )
+diff --git a/lib/game/game-engine.ts b/lib/game/game-engine.ts
+index 699f4df..a2f2e6f 100644
+--- a/lib/game/game-engine.ts
++++ b/lib/game/game-engine.ts
+@@ -39,6 +39,7 @@ export interface GameEngineState {
+   elapsedSeconds: number // Elapsed time in seconds
+   hasMovedOnce: boolean // Track if Pacman has moved at least once
+   pausedTime: number // Total time spent paused (in ms)
+   lastPauseTime: number // Timestamp when game was paused
++  lastUpdateTime: number // Timestamp for delta calculations
+ }
+@@ -95,6 +96,7 @@ export function createInitialState(config: GameConfig, level: number = 1): GameE
+     elapsedSeconds: 0,
+     hasMovedOnce: false,
+     pausedTime: 0,
+     lastPauseTime: 0,
++    lastUpdateTime: 0,
+   }
+ }
+@@ -115,6 +117,7 @@ export function startGame(state: GameEngineState): GameEngineState {
+     elapsedSeconds: 0,
+     hasMovedOnce: false,
+     pausedTime: 0,
+     lastPauseTime: 0,
++    lastUpdateTime: Date.now(),
+     session: {
+       ...state.session,
+       startTime: Date.now(),
+@@ -139,6 +142,7 @@ export function pauseGame(state: GameEngineState): GameEngineState {
+     // When resuming, add the paused duration to pausedTime
+     pausedTime: !isPausing && state.lastPauseTime > 0
+       ? state.pausedTime + (Date.now() - state.lastPauseTime)
+       : state.pausedTime,
++    lastUpdateTime: !isPausing ? Date.now() : state.lastUpdateTime,
+   }
+ }
+@@ -193,6 +197,7 @@ function checkPelletCollision(
+   pacman: PacmanState,
+   maze: Maze,
++  powerDurationMs: number,
+ ): {
+   pacman: PacmanState
+   maze: Maze
+@@ -216,7 +221,7 @@ function checkPelletCollision(
+         score: pacman.score + POINTS.POWER_PELLET,
+         pelletsEaten: pacman.pelletsEaten + 1,
+         powerActive: true,
+-        powerTimer: 6 * 60,
++        powerTimer: powerDurationMs,
+         ghostsEatenThisPower: 0,
+       }
+       cell.hasPowerPellet = false
+@@ -264,6 +269,9 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
+   if (state.gameState !== "PLAYING") {
+     return state
+   }
++
++  const now = Date.now()
++  const lastUpdateTime = state.lastUpdateTime || now
++  const deltaMs = Math.max(0, now - lastUpdateTime)
+ 
+   let { pacman, ghosts, maze, session, fsmVisualizations } = state
+   const lastTransitions: { ghostName: string; transition: FSMTransition }[] = []
+@@ -301,7 +309,8 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
+-  const pelletResult = checkPelletCollision(pacman, maze)
++  const powerDurationMs = config.globalAI.frightenedDuration * 1000
++  const pelletResult = checkPelletCollision(pacman, maze, powerDurationMs)
+   pacman = pelletResult.pacman
+   maze = pelletResult.maze
+   const powerPelletEaten = pelletResult.powerPelletEaten
+@@ -309,7 +318,7 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
+   if (pacman.powerActive) {
+-    pacman.powerTimer--
++    pacman.powerTimer = Math.max(0, pacman.powerTimer - deltaMs)
+     if (pacman.powerTimer <= 0) {
+       pacman.powerActive = false
+       pacman.ghostsEatenThisPower = 0 // Reset combo counter when power ends
+@@ -361,6 +370,7 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
+     ghostStates: ghosts.map((g) => ({
+       name: g.name,
+       position: { ...g.position },
++      direction: g.direction,
+       state: g.state,
+       target: { ...g.targetPosition },
+       path: [...g.path],
+@@ -425,6 +435,7 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
+     currentFrameIndex: frameHistory.length - 1,
+     elapsedSeconds, // Update elapsed time
+     gameStartTime, // Update start time
+     hasMovedOnce, // Update movement flag
++    lastUpdateTime: now,
+   }
+ }
+diff --git a/lib/game/ghost-fsm.ts b/lib/game/ghost-fsm.ts
+index 2dc06c4..0a82f6a 100644
+--- a/lib/game/ghost-fsm.ts
++++ b/lib/game/ghost-fsm.ts
+@@ -4,12 +4,12 @@ import { runPathfinding } from "./pathfinding"
+ 
+ // Ghost state durations in REAL SECONDS (not frames)
+ const DEFAULT_STATE_DURATIONS = {
+   INITIAL_SCATTER: 5, // 5 seconds
+-  CHASE: Infinity, // Indefinite
+-  SCATTER: 7, // 7 seconds (not used after initial)
+-  FRIGHTENED: 6, // 6 seconds
++  CHASE: 20, // seconds
++  SCATTER: 7, // seconds
++  FRIGHTENED: 6, // seconds
+ }
+@@ -79,6 +79,7 @@ export function createGhost(name: GhostName, homePosition: Vector2D, config?: Gh
+     scatterCorner: SCATTER_CORNERS[name],
+     homePosition,
+     stateTimer: 5 * 60, // 5 seconds at 60fps
+     config: config || DEFAULT_GHOST_CONFIGS[name],
++    moveProgress: 0,
+     isInitialScatter: true,
+     previousState: "SCATTER",
+     stateStartTime: 0, // Will be set when game starts
+@@ -204,6 +205,8 @@ export function updateGhostState(
+   }
+ 
+   const timeInState = (elapsedSeconds || 0) - (ghost.stateStartTime || 0)
++  const chaseDuration = globalAI?.chaseTime ?? DEFAULT_STATE_DURATIONS.CHASE
++  const scatterDuration = globalAI?.scatterTime ?? DEFAULT_STATE_DURATIONS.SCATTER
+ 
+   // Priority 1: Power pellet eaten - go to frightened mode
+   if (powerPelletEaten && ghost.state !== "DEAD") {
+@@ -221,8 +224,8 @@ export function updateGhostState(
+     switch (ghost.state) {
+       case "SCATTER":
+-        // After 5 seconds, go to CHASE mode permanently
+-        if (timeInState >= 5) {
++        // After scatter duration, go to CHASE mode
++        if (timeInState >= scatterDuration) {
+           ghost.state = "CHASE"
+           ghost.stateStartTime = elapsedSeconds || 0
+           ghost.previousState = "SCATTER"
+@@ -234,12 +237,13 @@ export function updateGhostState(
+       case "FRIGHTENED":
+         // After frightened duration, return to CHASE mode
+         if (timeInState >= (globalAI?.frightenedDuration ?? DEFAULT_STATE_DURATIONS.FRIGHTENED)) {
+-          ghost.state = "CHASE"
++          ghost.state = ghost.previousState === "SCATTER" ? "SCATTER" : "CHASE"
+           ghost.stateStartTime = elapsedSeconds || 0
+-          transition = FSM_TRANSITIONS.find((t) => t.from === "FRIGHTENED" && t.to === "CHASE") || null
++          transition =
++            FSM_TRANSITIONS.find((t) => t.from === "FRIGHTENED" && t.to === ghost.state) || null
+         }
+         break
+ 
+       case "CHASE":
+-        // Chase mode is indefinite, no transition
++        if (timeInState >= chaseDuration) {
++          ghost.state = "SCATTER"
++          ghost.stateStartTime = elapsedSeconds || 0
++          transition = FSM_TRANSITIONS.find((t) => t.from === "CHASE" && t.to === "SCATTER") || null
++        }
+         break
+     }
+   }
+@@ -260,12 +264,8 @@ export function updateGhostState(
+     case "SCATTER":
+-      // Random movement - not chasing Pacman
+-      ghost.targetPosition = {
+-        x: Math.floor(Math.random() * maze.width),
+-        y: Math.floor(Math.random() * maze.height),
+-      }
++      // Head to scatter corner
++      ghost.targetPosition = ghost.scatterCorner
+       break
+     case "FRIGHTENED":
+       // Flee from Pacman - move away
+@@ -289,17 +289,25 @@ export function moveGhost(ghost: GhostData): GhostData {
+-  if (ghost.path.length > 1) {
+-    const nextPos = ghost.path[1]
+-
+-    // Determine direction
+-    if (nextPos.x > ghost.position.x) ghost.direction = "right"
+-    else if (nextPos.x < ghost.position.x) ghost.direction = "left"
+-    else if (nextPos.y > ghost.position.y) ghost.direction = "down"
+-    else if (nextPos.y < ghost.position.y) ghost.direction = "up"
+-
+-    ghost.position = nextPos
+-    ghost.path = ghost.path.slice(1)
+-  }
+-
+-  return ghost
++export function moveGhost(ghost: GhostData): GhostData {
++  const relativeSpeed = ghost.config.relativeSpeed ?? 1
++  const effectiveSpeed = Math.max(0, relativeSpeed)
++  ghost.moveProgress = (ghost.moveProgress ?? 0) + effectiveSpeed
++
++  while (ghost.moveProgress >= 1 && ghost.path.length > 1) {
++    const nextPos = ghost.path[1]
++
++    // Determine direction
++    if (nextPos.x > ghost.position.x) ghost.direction = "right"
++    else if (nextPos.x < ghost.position.x) ghost.direction = "left"
++    else if (nextPos.y > ghost.position.y) ghost.direction = "down"
++    else if (nextPos.y < ghost.position.y) ghost.direction = "up"
++
++    ghost.position = nextPos
++    ghost.path = ghost.path.slice(1)
++    ghost.moveProgress -= 1
++  }
++
++  return ghost
+ }
+diff --git a/lib/game/types.ts b/lib/game/types.ts
+index 4c36ad9..c1f8d28 100644
+--- a/lib/game/types.ts
++++ b/lib/game/types.ts
+@@ -56,6 +56,7 @@ export interface GhostData {
+   scatterCorner: Vector2D
+   homePosition: Vector2D
+   stateTimer: number
+   config: GhostConfig
++  moveProgress?: number
+   isInitialScatter?: boolean // Track if this is the first scatter phase
+   previousState?: GhostState // Track previous state for returning from frightened mode
+   stateStartTime?: number // Real elapsed seconds when state started
+@@ -130,6 +131,7 @@ export interface GameFrame {
+   ghostStates: {
+     name: GhostName
+     position: Vector2D
++    direction: Direction
+     state: GhostState
+     target: Vector2D
+     path: Vector2D[]
+   }[]
