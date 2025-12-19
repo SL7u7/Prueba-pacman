@@ -50,6 +50,7 @@ export interface GameEngineState {
   hasMovedOnce: boolean // Track if Pacman has moved at least once
   pausedTime: number // Total time spent paused (in ms)
   lastPauseTime: number // Timestamp when game was paused
+  lastUpdateTime: number // Timestamp for delta calculations
 }
 
 export function createInitialState(config: GameConfig, level: number = 1): GameEngineState {
@@ -71,7 +72,7 @@ export function createInitialState(config: GameConfig, level: number = 1): GameE
   const session: GameSession = {
     score: 0,
     lives: 3,
-    level: 1,
+    level,
     pelletsRemaining: maze.totalPellets,
     totalPellets: maze.totalPellets,
     startTime: Date.now(),
@@ -109,6 +110,7 @@ export function createInitialState(config: GameConfig, level: number = 1): GameE
     hasMovedOnce: false,
     pausedTime: 0,
     lastPauseTime: 0,
+    lastUpdateTime: 0,
   }
 }
 
@@ -121,6 +123,7 @@ export function startGame(state: GameEngineState): GameEngineState {
     hasMovedOnce: false,
     pausedTime: 0,
     lastPauseTime: 0,
+    lastUpdateTime: Date.now(),
     session: {
       ...state.session,
       startTime: Date.now(),
@@ -139,6 +142,7 @@ export function pauseGame(state: GameEngineState): GameEngineState {
     pausedTime: !isPausing && state.lastPauseTime > 0
       ? state.pausedTime + (Date.now() - state.lastPauseTime)
       : state.pausedTime,
+    lastUpdateTime: !isPausing ? Date.now() : state.lastUpdateTime,
   }
 }
 
@@ -189,6 +193,7 @@ function movePacman(pacman: PacmanState, maze: Maze): PacmanState {
 function checkPelletCollision(
   pacman: PacmanState,
   maze: Maze,
+  powerDurationMs: number,
 ): {
   pacman: PacmanState
   maze: Maze
@@ -213,7 +218,7 @@ function checkPelletCollision(
         score: pacman.score + POINTS.POWER_PELLET,
         pelletsEaten: pacman.pelletsEaten + 1,
         powerActive: true,
-        powerTimer: 6 * 60,
+        powerTimer: powerDurationMs,
         ghostsEatenThisPower: 0,
       }
       cell.hasPowerPellet = false
@@ -276,7 +281,7 @@ function checkGhostCollision(
     }
   }
 
-  return { pacman, ghosts, ghostKilled }
+  return { pacman, ghosts: updatedGhosts, ghostKilled }
 }
 
 export function updateGame(state: GameEngineState, config: GameConfig): GameEngineState {
@@ -286,6 +291,9 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
 
   let { pacman, ghosts, maze, session, fsmVisualizations } = state
   const lastTransitions: { ghostName: string; transition: FSMTransition }[] = []
+  const now = Date.now()
+  const lastUpdateTime = state.lastUpdateTime || now
+  const deltaMs = Math.max(0, now - lastUpdateTime)
 
   // Move Pacman
   const previousPosition = { ...pacman.position }
@@ -306,13 +314,14 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
     ? Math.floor((Date.now() - gameStartTime - state.pausedTime) / 1000)
     : 0
 
-  const pelletResult = checkPelletCollision(pacman, maze)
+  const powerDurationMs = config.globalAI.frightenedDuration * 1000
+  const pelletResult = checkPelletCollision(pacman, maze, powerDurationMs)
   pacman = pelletResult.pacman
   maze = pelletResult.maze
   const powerPelletEaten = pelletResult.powerPelletEaten
 
   if (pacman.powerActive) {
-    pacman.powerTimer--
+    pacman.powerTimer = Math.max(0, pacman.powerTimer - deltaMs)
     if (pacman.powerTimer <= 0) {
       pacman.powerActive = false
       pacman.ghostsEatenThisPower = 0 // Reset combo counter when power ends
@@ -376,6 +385,7 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
     ghostStates: ghosts.map((g) => ({
       name: g.name,
       position: { ...g.position },
+      direction: g.direction,
       state: g.state,
       target: { ...g.targetPosition },
       path: [...g.path],
@@ -426,6 +436,7 @@ export function updateGame(state: GameEngineState, config: GameConfig): GameEngi
     elapsedSeconds, // Update elapsed time
     gameStartTime, // Update start time
     hasMovedOnce, // Update movement flag
+    lastUpdateTime: now,
   }
 }
 
