@@ -32,6 +32,12 @@ const GHOST_COLORS: Record<string, string> = {
 
 export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const frame = gameState.isStepByStepMode
+    ? gameState.frameHistory[gameState.currentFrameIndex]
+    : undefined
+  const pacmanPosition = frame?.pacmanPosition ?? gameState.pacman.position
+  const pacmanDirection = frame?.pacmanDirection ?? gameState.pacman.direction
+  const ghostsToRender = frame?.ghostStates ?? gameState.ghosts
 
   const drawMaze = useCallback(
     (ctx: CanvasRenderingContext2D) => {
@@ -109,16 +115,15 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasPro
 
   const drawPacman = useCallback(
     (ctx: CanvasRenderingContext2D) => {
-      const { pacman } = gameState
-      const px = pacman.position.x * cellSize + cellSize / 2
-      const py = pacman.position.y * cellSize + cellSize / 2
+      const px = pacmanPosition.x * cellSize + cellSize / 2
+      const py = pacmanPosition.y * cellSize + cellSize / 2
       const radius = cellSize / 2 - 2
 
       // Ángulo de la boca según dirección
       let startAngle = 0.2
       let endAngle = Math.PI * 2 - 0.2
 
-      switch (pacman.direction) {
+      switch (pacmanDirection) {
         case "right":
           startAngle = 0.2
           endAngle = Math.PI * 2 - 0.2
@@ -148,11 +153,11 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasPro
       ctx.closePath()
       ctx.fill()
     },
-    [gameState, cellSize],
+    [pacmanPosition, pacmanDirection, cellSize],
   )
 
   const drawGhost = useCallback(
-    (ctx: CanvasRenderingContext2D, ghost: (typeof gameState.ghosts)[0]) => {
+    (ctx: CanvasRenderingContext2D, ghost: (typeof ghostsToRender)[0]) => {
       const px = ghost.position.x * cellSize + cellSize / 2
       const py = ghost.position.y * cellSize + cellSize / 2
       const radius = cellSize / 2 - 2
@@ -228,16 +233,16 @@ export function GameCanvas({ gameState, showPath, cellSize = 16 }: GameCanvasPro
       ctx.arc(px + eyeOffsetX + pupilX, py + eyeOffsetY + pupilY, 1.5, 0, Math.PI * 2)
       ctx.fill()
     },
-    [gameState, cellSize],
+    [cellSize, ghostsToRender],
   )
 
   const drawGhosts = useCallback(
     (ctx: CanvasRenderingContext2D) => {
-      for (const ghost of gameState.ghosts) {
+      for (const ghost of ghostsToRender) {
         drawGhost(ctx, ghost)
       }
     },
-    [gameState.ghosts, drawGhost],
+    [ghostsToRender, drawGhost],
   )
 
   const drawUI = useCallback(

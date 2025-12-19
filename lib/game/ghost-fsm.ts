@@ -4,9 +4,9 @@ import { runPathfinding } from "./pathfinding"
 // Ghost state durations in REAL SECONDS (not frames)
 const DEFAULT_STATE_DURATIONS = {
   INITIAL_SCATTER: 5, // 5 seconds
-  CHASE: Infinity, // Indefinite
-  SCATTER: 7, // 7 seconds (not used after initial)
-  FRIGHTENED: 6, // 6 seconds
+  CHASE: 20, // seconds
+  SCATTER: 7, // seconds
+  FRIGHTENED: 6, // seconds
 }
 
 // Scatter corners for each ghost
@@ -82,6 +82,7 @@ export function createGhost(name: GhostName, homePosition: Vector2D, config?: Gh
     homePosition,
     stateTimer: 5 * 60, // 5 seconds at 60fps
     config: config || DEFAULT_GHOST_CONFIGS[name],
+    moveProgress: 0,
     isInitialScatter: true,
     previousState: "SCATTER",
     stateStartTime: 0, // Will be set when game starts
@@ -202,6 +203,8 @@ export function updateGhostState(
 
   // Calculate how long we've been in current state
   const timeInState = (elapsedSeconds || 0) - (ghost.stateStartTime || 0)
+  const chaseDuration = globalAI?.chaseTime ?? DEFAULT_STATE_DURATIONS.CHASE
+  const scatterDuration = globalAI?.scatterTime ?? DEFAULT_STATE_DURATIONS.SCATTER
 
   // Priority 1: Power pellet eaten - go to frightened mode
   if (powerPelletEaten && ghost.state !== "DEAD") {
@@ -214,8 +217,8 @@ export function updateGhostState(
   else {
     switch (ghost.state) {
       case "SCATTER":
-        // After 5 seconds, go to CHASE mode permanently
-        if (timeInState >= 5) {
+        // After scatter duration, go to CHASE mode
+        if (timeInState >= scatterDuration) {
           ghost.state = "CHASE"
           ghost.stateStartTime = elapsedSeconds || 0
           ghost.previousState = "SCATTER"
@@ -225,16 +228,21 @@ export function updateGhostState(
         break
 
       case "FRIGHTENED":
-        // After 6 seconds, return to CHASE mode
-        if (timeInState >= 6) {
-          ghost.state = "CHASE"
+        // After frightened duration, return to CHASE mode
+        if (timeInState >= (globalAI?.frightenedDuration ?? DEFAULT_STATE_DURATIONS.FRIGHTENED)) {
+          ghost.state = ghost.previousState === "SCATTER" ? "SCATTER" : "CHASE"
           ghost.stateStartTime = elapsedSeconds || 0
-          transition = FSM_TRANSITIONS.find((t) => t.from === "FRIGHTENED" && t.to === "CHASE") || null
+          transition =
+            FSM_TRANSITIONS.find((t) => t.from === "FRIGHTENED" && t.to === ghost.state) || null
         }
         break
 
       case "CHASE":
-        // Chase mode is indefinite, no transition
+        if (timeInState >= chaseDuration) {
+          ghost.state = "SCATTER"
+          ghost.stateStartTime = elapsedSeconds || 0
+          transition = FSM_TRANSITIONS.find((t) => t.from === "CHASE" && t.to === "SCATTER") || null
+        }
         break
     }
   }
@@ -246,11 +254,8 @@ export function updateGhostState(
       ghost.targetPosition = calculateChaseTarget(ghost, pacmanPosition, pacmanDirection, blinky?.position)
       break
     case "SCATTER":
-      // Random movement - not chasing Pacman
-      ghost.targetPosition = {
-        x: Math.floor(Math.random() * maze.width),
-        y: Math.floor(Math.random() * maze.height),
-      }
+      // Head to scatter corner
+      ghost.targetPosition = ghost.scatterCorner
       break
     case "FRIGHTENED":
       // Flee from Pacman - move away
@@ -281,8 +286,12 @@ export function updateGhostState(
 }
 
 // Move ghost to next position in path
-export function moveGhost(ghost: GhostData): GhostData {
-  if (ghost.path.length > 1) {
+export function moveGhost(ghost: GhostData, speedMultiplier: number = 1): GhostData {
+  const relativeSpeed = ghost.config.relativeSpeed ?? 1
+  const effectiveSpeed = Math.max(0, relativeSpeed * speedMultiplier)
+  ghost.moveProgress = (ghost.moveProgress ?? 0) + effectiveSpeed
+
+  while (ghost.moveProgress >= 1 && ghost.path.length > 1) {
     const nextPos = ghost.path[1]
 
     // Determine direction
@@ -293,6 +302,7 @@ export function moveGhost(ghost: GhostData): GhostData {
 
     ghost.position = nextPos
     ghost.path = ghost.path.slice(1)
+    ghost.moveProgress -= 1
   }
 
   return ghost

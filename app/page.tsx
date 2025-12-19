@@ -192,7 +192,7 @@ export default function PacManLab() {
   const handleSelectLevel = useCallback(
     (level: number) => {
       setSelectedLevel(level)
-      const newState = createInitialState(config)
+      const newState = createInitialState(config, level)
       newState.session.level = level
       setGameState(newState)
       setAppView("game")
@@ -216,7 +216,7 @@ export default function PacManLab() {
   }, [])
 
   const handleReset = useCallback(() => {
-    const newState = resetGame(config)
+    const newState = resetGame(config, selectedLevel)
     newState.session.level = selectedLevel
     setGameState(newState)
     gameStartTimeRef.current = Date.now()
@@ -246,11 +246,23 @@ export default function PacManLab() {
 
   // Step-by-step mode handlers
   const handleToggleStepByStep = useCallback(() => {
-    setGameState((prev) => ({
-      ...prev,
-      isStepByStepMode: !prev.isStepByStepMode,
-      isPaused: !prev.isStepByStepMode,
-    }))
+    setGameState((prev) => {
+      if (!prev.isStepByStepMode) {
+        return {
+          ...prev,
+          isStepByStepMode: true,
+          isPaused: true,
+          currentFrameIndex: 0,
+        }
+      }
+
+      return {
+        ...prev,
+        isStepByStepMode: false,
+        isPaused: false,
+        currentFrameIndex: Math.max(prev.frameHistory.length - 1, 0),
+      }
+    })
   }, [])
 
   const handleStepPlayPause = useCallback(() => {

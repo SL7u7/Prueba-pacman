@@ -55,6 +55,7 @@ export interface GhostData {
   homePosition: Vector2D
   stateTimer: number
   config: GhostConfig
+  moveProgress?: number
   isInitialScatter?: boolean // Track if this is the first scatter phase
   previousState?: GhostState // Track previous state for returning from frightened mode
   stateStartTime?: number // Real elapsed seconds when state started
@@ -164,6 +165,7 @@ export interface GameFrame {
   ghostStates: {
     name: GhostName
     position: Vector2D
+    direction: Direction
     state: GhostState
     target: Vector2D
     path: Vector2D[]
